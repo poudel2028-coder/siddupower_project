@@ -1,0 +1,186 @@
+SIDESTACK — PROJECT STRUCTURE AND HOW TO HOST IT
+=================================================
+
+Exact file tree
+---------------
+siddhu power_project/
+  netlify.toml
+  requirements.txt
+  runtime.txt
+  main.py
+  models.py
+  DEPLOY.txt
+  netlify/
+    functions/
+      api.py
+  public/
+    index.html
+    css/
+      styles.css
+    js/
+      app.js
+
+
+WHY THIS SHAPE WORKS ON NETLIFY
+-------------------------------
+Netlify cannot keep a long-running FastAPI process, and it cannot store SQLite files
+(the filesystem is wiped between deploys / cold starts).
+
+- Static frontend is published from /public
+- FastAPI is wrapped with Mangum and runs as a Serverless Function
+- /api/* is redirected to that function
+- Postgres lives OUTSIDE Netlify (Neon, Supabase, or Railway)
+- Live scoreboard uses 2-second JS polling (WebSockets are not reliable on Netlify Functions)
+
+
+A) LOCAL RUN (before you deploy)
+--------------------------------
+1. Install Python 3.11+
+2. From this folder:
+
+   python -m venv .venv
+   .venv\Scripts\activate
+   pip install -r requirements.txt
+
+3. Start the API + frontend together:
+
+   uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+4. Open http://127.0.0.1:8000
+
+Local mode uses SQLite (sidestack.db) ONLY on your machine so you can demo without
+Postgres. SQLite is blocked automatically when NETLIFY=true.
+
+
+B) FREE POSTGRES (required for Netlify)
+---------------------------------------
+Pick one:
+
+NEON (recommended, generous free tier)
+  1. Create an account at https://neon.tech
+  2. New project -> copy the connection string
+  3. It looks like:
+     postgresql://USER:PASSWORD@HOST/dbname?sslmode=require
+
+SUPABASE
+  1. https://supabase.com -> New project
+  2. Project Settings -> Database -> Connection string (URI)
+  3. Use the "Transaction" / pooler URI if you hit connection limits
+
+RAILWAY
+  1. https://railway.app -> New project -> PostgreSQL
+  2. Copy DATABASE_URL from the Postgres service Variables tab
+
+Never paste the password into git.
+
+
+C) NETLIFY DEPLOY (frontend + backend on one site)
+--------------------------------------------------
+1. Put this folder in GitHub (or GitLab / Bitbucket), or use Netlify CLI.
+
+   GitHub route:
+     - Create a repo
+     - Push this project
+     - Netlify -> Add new site -> Import from Git
+     - Publish directory: public
+     - The netlify.toml already sets publish, functions, and redirects
+
+   CLI route:
+     npm install -g netlify-cli
+     netlify login
+     netlify init
+     netlify deploy --prod
+
+2. Site configuration -> Environment variables, add:
+
+     DATABASE_URL = postgresql://USER:PASSWORD@HOST/dbname?sslmode=require
+     SECRET_KEY   = a-long-random-string
+
+   If your host gives postgres:// instead of postgresql://, that is fine.
+   models.py rewrites it to postgresql+psycopg2:// automatically.
+
+3. Site settings -> Functions:
+   Directory is netlify/functions (already in netlify.toml).
+
+4. Redeploy after saving env vars (Deploys -> Trigger deploy).
+
+5. Test:
+     https://YOUR-SITE.netlify.app
+     https://YOUR-SITE.netlify.app/api/health
+
+   Health should return {"ok": true, "service": "sidestack"}.
+
+6. Mobile:
+   Open the Netlify URL on your phone. The referee desk uses large tap targets
+   (56–68px), sticky chrome, and iOS safe-area padding.
+
+
+NETLIFY GOTCHAS
+---------------
+- Python Functions have a short timeout (typically 10s on free, 26s on some plans).
+  Polling every 2s is intentional. Do not expect WebSockets here.
+- Cold starts: first API call after idle can take a few seconds.
+- "Edge Functions" in Netlify are JavaScript/WASM only. This app uses
+  Serverless Functions + redirects, which is the correct pattern for FastAPI.
+- If /api/* 404s, confirm:
+    * netlify/functions/api.py exists
+    * included_files lists main.py and models.py
+    * Python version is 3.11 (runtime.txt + PYTHON_VERSION)
+- If the database errors, DATABASE_URL is missing, still sqlite, or SSL is off.
+  Add ?sslmode=require for Neon/Supabase.
+
+
+D) OTHER FREE / CHEAP HOSTS (if Netlify Python is painful)
+----------------------------------------------------------
+Option 1 — Render.com (simplest full FastAPI)
+  1. New Web Service from this repo
+  2. Build: pip install -r requirements.txt
+  3. Start: uvicorn main:app --host 0.0.0.0 --port $PORT
+  4. Add DATABASE_URL + SECRET_KEY
+  5. Free tier sleeps when idle. Fine for friends.
+
+Option 2 — Railway
+  1. New project from repo
+  2. Add a Postgres plugin
+  3. Start command: uvicorn main:app --host 0.0.0.0 --port $PORT
+  4. Railway injects DATABASE_URL
+
+Option 3 — Split hosting
+  - Frontend: Netlify or Cloudflare Pages (publish /public)
+  - Backend: Render / Railway FastAPI
+  - In public/js/app.js, or from the browser console:
+      window.SIDESTACK_API = "https://your-api.onrender.com";
+    CORS is already allow_origins=["*"], so this split works.
+
+Option 4 — Fly.io
+  More setup (Dockerfile) but always-on-ish on the smallest VM.
+
+
+FIRST-TIME DEMO SCRIPT
+----------------------
+You need at least 3 accounts: two players + one referee friend.
+
+1. Register Alpha (Basketball)
+2. Register Bravo (Basketball)
+3. Register Refbot (Basketball)
+4. Alpha adds Bravo and Refbot as friends. Bravo adds Alpha.
+5. Alpha creates team "Night Owls". Share the 4-character code.
+6. Bravo creates team "Cinder Squad".
+7. Alpha (captain) Challenges Cinder Squad and nominates Refbot.
+8. Sign in as Refbot -> Games -> Ref desk -> Start match.
+9. Tap a player, then +2 / +3 / Foul (basketball) or Goal / Cards (football).
+10. End game & confirm stats. MVP is the top scorer. Stats hit the database
+    and show on Home + friend profiles.
+
+
+CRICKET EASTER EGG
+------------------
+Choosing Cricket on the register form never submits. The UI modal fires, the
+dropdown snaps back to Basketball, and the API also rejects cricket.
+
+
+SECURITY NOTES
+--------------
+Change SECRET_KEY in production.
+This is a friends app: tokens are HMAC, passwords are PBKDF2.
+Do not commit .env files or sidestack.db.

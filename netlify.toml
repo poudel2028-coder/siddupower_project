@@ -1,0 +1,27 @@
+[build]
+  command = "pip install -r requirements.txt"
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  PYTHON_VERSION = "3.11"
+
+[functions]
+  directory = "netlify/functions"
+
+[functions.api]
+  included_files = ["main.py", "models.py"]
+
+# FastAPI (Mangum) lives in a Netlify Function, not an Edge Function.
+# Edge Functions are JS/WASM-only; Python APIs must use Serverless Functions.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+# SPA fallback for client-side views
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
